@@ -8,7 +8,7 @@ from operator import itemgetter
 from boto3.session import Session
 
 cf = boto3.client('cloudfront')
-secret_custome_headers = ['x-pre-shared-key']
+secret_custom_headers = ['x-pre-shared-key']
 
 
 def get_certificates() -> dict:
@@ -105,7 +105,7 @@ class CfInfo():
             if 'CustomHeaders' in origin and origin['CustomHeaders']['Quantity'] > 0:
                 origin_custom_header_items = []
                 for item in origin['CustomHeaders']['Items']:
-                    if item['HeaderName'] in secret_custome_headers:
+                    if item['HeaderName'] in secret_custom_headers:
                         origin_custom_header_items.append(f"{item['HeaderName']}:*****")
                     else:
                         origin_custom_header_items.append(f"{item['HeaderName']}:{item['HeaderValue']}")
@@ -226,9 +226,21 @@ class CfInfo():
             # FieldLevelEncryptionId
             field_level_encryption_id = behavior['FieldLevelEncryptionId'] if len(behavior['FieldLevelEncryptionId']) > 0 else '-'
 
-            # LambdaFunctionAssociations
-            # TODO Functions
-            lambda_function_associations = behavior['LambdaFunctionAssociations']['Quantity']
+            # FunctionAssociations
+            function_associations = {
+                'viewer-request': '-',
+                'viewer-response': '-',
+                'origin-request': '-',
+                'origin-response': '-',
+            }
+            if 'LambdaFunctionAssociations' in behavior and behavior['LambdaFunctionAssociations']['Quantity'] > 0:
+                for f in behavior['LambdaFunctionAssociations']['Items']:
+                    lambda_function_name = re.sub("^.*:function:", "", f['LambdaFunctionARN'])
+                    function_associations[f['EventType']] = f"Lambda@Edge;{lambda_function_name};IncludeBody={f['IncludeBody']}"
+            if 'FunctionAssociations' in behavior and behavior['FunctionAssociations']['Quantity'] > 0:
+                for f in behavior['FunctionAssociations']['Items']:
+                    function_name = re.sub("^.*:function/", "", f['FunctionARN'])
+                    function_associations[f['EventType']] = f"CloudFrontFunctions;{function_name}"
 
             behavior_info = {
                 'DistributionId': self.distribution['Id'],
@@ -256,7 +268,10 @@ class CfInfo():
                 'RestrictViewerAccess': restrict_viewer_access,
                 'SmoothStreaming': behavior['SmoothStreaming'],
                 'FieldLevelEncryptionId': field_level_encryption_id,
-                'LambdaFunctionAssociations': lambda_function_associations,
+                'FunctionAssociation(ViewerRequest)': function_associations['viewer-request'],
+                'FunctionAssociation(ViewerResponse)': function_associations['viewer-response'],
+                'FunctionAssociation(OriginRequest)': function_associations['origin-request'],
+                'FunctionAssociation(OriginResponse)': function_associations['origin-response'],
             }
             behavior_infos.append(behavior_info)
             precedence += 1
@@ -310,13 +325,9 @@ def main():
         behavior_infos.extend(cf_info.generate_behavior_infos())
         error_pages_infos.extend(cf_info.generate_error_pages_infos())
 
-    #pprint(distribution_infos)
     write_tsv('./distribution.tsv', sorted(distribution_infos, key=itemgetter('AlternateDomainNames')))
-    #pprint(origin_infos)
     write_tsv('./origins.tsv', sorted(origin_infos, key=itemgetter('AlternateDomainNames')))
-    #pprint(behavior_infos)
     write_tsv('./behaviors.tsv', sorted(behavior_infos, key=itemgetter('AlternateDomainNames', 'Precedence')))
-    #pprint(error_pages_infos)
     write_tsv('./error_pages.tsv', sorted(error_pages_infos, key=itemgetter('AlternateDomainNames', 'ErrorCode')))
 
 
