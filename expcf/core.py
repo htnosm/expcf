@@ -6,42 +6,288 @@ import re
 import csv
 from operator import itemgetter
 from boto3.session import Session
-#from pprint import pprint
 
 cf = boto3.client('cloudfront')
 secret_custome_headers = ['x-pre-shared-key']
 
 
-def get_certificates():
+def get_certificates() -> dict:
     session = Session(region_name="us-east-1")
     acm = session.client('acm')
     paginator = acm.get_paginator('list_certificates')
-
-    result = []
-    for page in paginator.paginate():
-        result.extend(page['CertificateSummaryList'])
-
-    return result
+    return [page['CertificateSummaryList'] for page in paginator.paginate()][0]
 
 
-def get_distribution_config(distribution_id):
-    response = cf.get_distribution_config(
-        Id=distribution_id
-    )
-
-    return response['DistributionConfig']
-
-
-def write_tsv(file, data_dict):
+def write_tsv(file, data_dict) -> None:
     with open(file, 'w', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=data_dict[0].keys(), delimiter="\t", quotechar='"')
         writer.writeheader()
         writer.writerows(data_dict)
 
 
+class CfInfo():
+    def __init__(self, distribution, certificates) -> None:
+        self.distribution = distribution
+        # AlternateDomainNames
+        self.alternate_domain_names = ";".join(sorted(distribution['Aliases']['Items']))
+        # WebACL
+        self.web_acl_id = re.sub("^.*/", "", distribution['WebACLId'])
+        self.web_acl_name = re.sub("^.*/webacl/(.*)/.*$", "\\1", distribution['WebACLId'])
+        self.web_acl = f"{self.web_acl_name} ({self.web_acl_id})" if len(self.web_acl_id) > 0 else "-"
+        # ViewerCertificate
+        viewer_certificate = distribution['ViewerCertificate']
+        self.certificate = "-"
+        if 'Certificate' in viewer_certificate:
+            certificate_arn = viewer_certificate['Certificate']
+            certificate_id = re.sub("^.*/", "", certificate_arn)
+            certificate_domain = [c['DomainName'] for c in certificates if c['CertificateArn'] == certificate_arn][0]
+            self.certificate = f"{certificate_domain} ({certificate_id})" if len(certificate_id) > 0 else "-"
+        self.minimum_protocol_version = viewer_certificate['MinimumProtocolVersion'] if 'MinimumProtocolVersion' in viewer_certificate else "-"
+        self.ssl_support_method = viewer_certificate['SSLSupportMethod'] if 'SSLSupportMethod' in viewer_certificate else "-"
+        # DistributionConfig
+        self.distribution_config = cf.get_distribution_config(Id=self.distribution['Id'])['DistributionConfig']
+        # GeoRestriction
+        geo_restrictions = self.distribution_config['Restrictions']['GeoRestriction']
+        self.geo_restriction = geo_restrictions['RestrictionType']
+        if geo_restrictions['Quantity'] > 0:
+            self.geo_restriction = ";".join(sorted(geo_restrictions['Items']))
+
+    def generate_distribution_info(self) -> dict:
+        return {
+            'DistributionId': self.distribution['Id'],
+            'AlternateDomainNames': self.alternate_domain_names,
+            'DomainName': self.distribution['DomainName'],
+            'Description': self.distribution['Comment'],
+            'PriceClass': self.distribution['PriceClass'],
+            'HttpVersion': self.distribution['HttpVersion'],
+            'WebACL': self.web_acl,
+            'ViewerCertificate': self.certificate,
+            'SecurityPolicy': self.minimum_protocol_version,
+            'SSLSupportMethod': self.ssl_support_method,
+            'Logging': self.distribution_config['Logging']['Enabled'],
+            'Logging.Bucket': self.distribution_config['Logging']['Bucket'],
+            'Logging.Prefix': self.distribution_config['Logging']['Prefix'],
+            'Logging.IncludeCookies': self.distribution_config['Logging']['IncludeCookies'],
+            'DefaultRootObject': self.distribution_config['DefaultRootObject'],
+            'IsIPV6Enabled': self.distribution_config['IsIPV6Enabled'],
+            'Status': self.distribution['Status'],
+            'Enabled': self.distribution_config['Enabled'],
+            'GeoRestriction': self.geo_restriction,
+        }
+
+    def generate_origin_infos(self) -> list:
+        origin_infos = []
+        for origin in self.distribution_config['Origins']['Items']:
+            # OriginType
+            if 'S3OriginConfig' in origin:
+                origin_type = 'S3'
+                oai = origin['S3OriginConfig']['OriginAccessIdentity'] if 'OriginAccessIdentity' in origin['S3OriginConfig'] else '-'
+            elif 'CustomOriginConfig' in origin:
+                origin_type = 'Custom'
+                custom_origin_config = origin['CustomOriginConfig']
+                custom_origin_params = {}
+                for key in ["OriginProtocolPolicy", "HTTPPort", "HTTPSPort", "OriginReadTimeout", "OriginKeepaliveTimeout"]:
+                    custom_origin_params[key] = custom_origin_config[key] if key in custom_origin_config else "-"
+                if 'OriginSslProtocols' in custom_origin_config and custom_origin_config['OriginSslProtocols']['Quantity'] > 0:
+                    origin_ssl_protocols = ";".join(sorted(custom_origin_config['OriginSslProtocols']['Items']))
+                else:
+                    origin_ssl_protocols = '-'
+            else:
+                origin_type = 'Unknown'
+
+            # OriginShield
+            if 'OriginShield' in origin and origin['OriginShield']['Enabled']:
+                origin_shield = origin['OriginShield']['OriginShieldRegion']
+            else:
+                origin_shield = False
+
+            # CustomHeaders
+            if 'CustomHeaders' in origin and origin['CustomHeaders']['Quantity'] > 0:
+                origin_custom_header_items = []
+                for item in origin['CustomHeaders']['Items']:
+                    if item['HeaderName'] in secret_custome_headers:
+                        origin_custom_header_items.append(f"{item['HeaderName']}:*****")
+                    else:
+                        origin_custom_header_items.append(f"{item['HeaderName']}:{item['HeaderValue']}")
+                origin_custom_headers = ";".join(sorted(origin_custom_header_items))
+            else:
+                origin_custom_headers = '-'
+
+            origin_info = {
+                'DistributionId': self.distribution['Id'],
+                'AlternateDomainNames': self.alternate_domain_names,
+                'OriginName': origin['Id'],
+                'OriginDomain': origin['DomainName'],
+                'OriginPath': origin['OriginPath'],
+                'OriginType': origin_type,
+                'OriginShield': origin_shield,
+                'OriginAccessIdentity': oai if origin_type == 'S3' else '-',
+                'OriginProtocolPolicy': custom_origin_params['OriginProtocolPolicy'] if origin_type == 'Custom' else '-',
+                'HTTPPort': custom_origin_params['HTTPPort'] if origin_type == 'Custom' else '-',
+                'HTTPSPort': custom_origin_params['HTTPSPort'] if origin_type == 'Custom' else '-',
+                'OriginSslProtocols': origin_ssl_protocols if origin_type == 'Custom' else '-',
+                'OriginReadTimeout': custom_origin_params['OriginReadTimeout'] if origin_type == 'Custom' else '-',
+                'OriginKeepaliveTimeout': custom_origin_params['OriginKeepaliveTimeout'] if origin_type == 'Custom' else '-',
+                'ConnectionAttempts': origin['ConnectionAttempts'],
+                'ConnectionTimeout': origin['ConnectionTimeout'],
+                'CustomHeaders': origin_custom_headers,
+            }
+            origin_infos.append(origin_info)
+        return origin_infos
+
+    def generate_behavior_infos(self) -> list:
+        behavior_infos = []
+
+        behaviors = []
+        if self.distribution_config['CacheBehaviors']['Quantity'] > 0:
+            behaviors = self.distribution_config['CacheBehaviors']['Items']
+        behaviors.extend([self.distribution_config['DefaultCacheBehavior']])
+        precedence = 0
+
+        for behavior in behaviors:
+            path_pattern = behavior['PathPattern'] if 'PathPattern' in behavior else "Default(*)"
+
+            # CachePolicy
+            cache_policy_params = {
+                'Name': '-',
+                'MinTTL': 0,
+                'MaxTTL': 0,
+                'DefaultTTL': 0,
+                'Headers': 'none',
+                'QueryStrings': 'none',
+                'Cookies': 'none',
+                'Gzip': False,
+                'Brotli': False,
+            }
+            if 'CachePolicyId' in behavior and len(behavior['CachePolicyId']) > 0:
+                cache_policy_config = cf.get_cache_policy(Id=behavior['CachePolicyId'])['CachePolicy']['CachePolicyConfig']
+                cache_policy_params['Name'] = f"{cache_policy_config['Name']}({behavior['CachePolicyId']})"
+                params = cache_policy_config['ParametersInCacheKeyAndForwardedToOrigin']
+                if 'Headers' in params['HeadersConfig']:
+                    headers = params['HeadersConfig']['Headers']
+                    cache_policy_params['Headers'] = ";".join(sorted(headers['Items']))
+                if 'QueryStrings' in params['QueryStringsConfig']:
+                    query_strings = params['QueryStringsConfig']['QueryStrings']
+                    cache_policy_params['QueryStrings'] = ";".join(sorted(query_strings['Items']))
+                if 'Cookies' in params['CookiesConfig']:
+                    cookies = params['CookiesConfig']['Cookies']
+                    cache_policy_params['Cookies'] = ";".join(sorted(cookies['Items']))
+                for key in ["MinTTL", "MaxTTL", "DefaultTTL"]:
+                    cache_policy_params[key] = cache_policy_config[key] if key in cache_policy_config else cache_policy_params[key]
+                for key in ["Gzip", "Brotli"]:
+                    cache_policy_params[key] = params[f"EnableAcceptEncodin{key}"] if f"EnableAcceptEncodin{key}" in params else cache_policy_params[key]
+            else:
+                forwarded_values = behavior['ForwardedValues']
+                if 'Headers' in behavior:
+                    cache_policy_params['Headers'] = ";".join(sorted(behavior['Headers']['Items']))
+                if 'QueryStrings' in forwarded_values:
+                    query_strings = forwarded_values['QueryString']
+                    if 'QueryStringCacheKeys' in query_strings and query_strings['QueryStringCacheKeys']['Quantity'] > 0:
+                        query_strings = ";".join(sorted(query_strings['QueryStringCacheKeys']['Items']))
+                    cache_policy_params['QueryStrings'] = query_strings
+                if 'Cookies' in forwarded_values['Cookies']:
+                    cookies = forwarded_values['Cookies']['Forward']
+                    if forwarded_values['Cookies']['WhitelistedNames']['Quantity'] > 0:
+                        cookies = ";".join(sorted(forwarded_values['Cookies']['WhitelistedNames']['Items']))
+                    cache_policy_params['Cookies'] = cookies
+                for key in ["MinTTL", "MaxTTL", "DefaultTTL"]:
+                    cache_policy_params[key] = behavior[key] if key in behavior else cache_policy_params[key]
+                cache_policy_params['Gzip'] = '-'
+                cache_policy_params['Brotli'] = '-'
+
+            # OriginRequestPolicy
+            origin_request_policy_params = {
+                'Name': '-',
+                'HeaderBehavior': 'none',
+                'QueryStringBehavior': 'none',
+                'CookieBehavior': 'none',
+            }
+            if 'OriginRequestPolicyId' in behavior and len(behavior['OriginRequestPolicyId']) > 0:
+                origin_request_policy_config = cf.get_origin_request_policy(Id=behavior['OriginRequestPolicyId'])['OriginRequestPolicy']['OriginRequestPolicyConfig']
+                origin_request_policy_params['Name'] = f"{origin_request_policy_config['Name']}({behavior['OriginRequestPolicyId']})"
+                if 'Headers' in origin_request_policy_config['HeadersConfig']:
+                    headers = origin_request_policy_config['HeadersConfig']['Headers']
+                    origin_request_policy_params['HeaderBehavior'] = ";".join(sorted(headers['Items']))
+                if 'QueryStrings' in origin_request_policy_config['QueryStringsConfig']:
+                    query_strings = origin_request_policy_config['QueryStringsConfig']['QueryStrings']
+                    origin_request_policy_params['QueryStringBehavior'] = ";".join(sorted(query_strings['Items']))
+                if 'Cookies' in origin_request_policy_config['CookiesConfig']:
+                    cookies = origin_request_policy_config['CookiesConfig']['Cookies']
+                    origin_request_policy_params['CookieBehavior'] = ";".join(sorted(cookies['Items']))
+
+            # RestrictViewerAccess
+            if 'TrustedKeyGroups' in behavior and behavior['TrustedKeyGroups']['Quantity'] > 0:
+                restrict_viewer_access = ";".join(sorted(behavior['TrustedKeyGroups']['Items']))
+            elif 'TrustedSigners' in behavior and behavior['TrustedSigners']['Quantity'] > 0:
+                restrict_viewer_access = ";".join(sorted(behavior['TrustedSigners']['Items']))
+            else:
+                restrict_viewer_access = False
+
+            # FieldLevelEncryptionId
+            field_level_encryption_id = behavior['FieldLevelEncryptionId'] if len(behavior['FieldLevelEncryptionId']) > 0 else '-'
+
+            # LambdaFunctionAssociations
+            # TODO Functions
+            lambda_function_associations = behavior['LambdaFunctionAssociations']['Quantity']
+
+            behavior_info = {
+                'DistributionId': self.distribution['Id'],
+                'AlternateDomainNames': self.alternate_domain_names,
+                'Precedence': precedence,
+                'PathPattern': path_pattern,
+                'TargetOriginId': behavior['TargetOriginId'],
+                'ViewerProtocolPolicy': behavior['ViewerProtocolPolicy'],
+                'Compress': behavior['Compress'],
+                'AllowedMethods': ";".join(behavior['AllowedMethods']['Items']),
+                'CachedMethods': ";".join(behavior['AllowedMethods']['CachedMethods']['Items']),
+                'CachePolicy': cache_policy_params['Name'],
+                'MinTTL': cache_policy_params['MinTTL'],
+                'MaxTTL': cache_policy_params['MaxTTL'],
+                'DefaultTTL': cache_policy_params['DefaultTTL'],
+                'Headers': cache_policy_params['Headers'],
+                'QueryStrings': cache_policy_params['QueryStrings'],
+                'Cookies': cache_policy_params['Cookies'],
+                'Gzip': cache_policy_params['Gzip'],
+                'Brotli': cache_policy_params['Brotli'],
+                'OriginRequestPolicy': origin_request_policy_params['Name'],
+                'HeaderBehavior': origin_request_policy_params['HeaderBehavior'],
+                'QueryStringBehavior': origin_request_policy_params['QueryStringBehavior'],
+                'CookieBehavior': origin_request_policy_params['CookieBehavior'],
+                'RestrictViewerAccess': restrict_viewer_access,
+                'SmoothStreaming': behavior['SmoothStreaming'],
+                'FieldLevelEncryptionId': field_level_encryption_id,
+                'LambdaFunctionAssociations': lambda_function_associations,
+            }
+            behavior_infos.append(behavior_info)
+            precedence += 1
+        return behavior_infos
+
+    def generate_error_pages_infos(self) -> list:
+        error_pages_infos = []
+        custom_error_responses = self.distribution_config['CustomErrorResponses']
+        items = custom_error_responses['Items'] if custom_error_responses['Quantity'] > 0 else []
+
+        for i in [400, 403, 404, 405, 414, 416, 500, 501, 502, 503, 504]:
+            error_pages_info = {
+                'DistributionId': self.distribution['Id'],
+                'AlternateDomainNames': self.alternate_domain_names,
+                'ErrorCode': i,
+                'ErrorCachingMinTTL': 300,
+                'ResponsePagePath': "-",
+                'ResponseCode': "-"
+            }
+            for item in items:
+                if i == item['ErrorCode']:
+                    error_pages_info['ErrorCachingMinTTL'] = item['ErrorCachingMinTTL']
+                    error_pages_info['ResponsePagePath'] = item['ResponsePagePath']
+                    error_pages_info['ResponseCode'] = item['ResponseCode']
+                    break
+            error_pages_infos.append(error_pages_info)
+        return error_pages_infos
+
+
 def main():
     paginator = cf.get_paginator('list_distributions')
-
     try:
         list_distributions = [page['DistributionList']['Items'] for page in paginator.paginate()][0]
     except Exception as e:
@@ -57,278 +303,12 @@ def main():
     behavior_infos = []
     error_pages_infos = []
     for distribution in list_distributions:
-        #pprint(distribution)
-        distribution_info = {}
-        origin_info = {}
+        cf_info = CfInfo(distribution, certificates)
 
-        # AlternateDomainNames
-        alternate_domain_names = ";".join(sorted(distribution['Aliases']['Items']))
-
-        # WebACL
-        web_acl_id = re.sub("^.*/", "", distribution['WebACLId'])
-        web_acl_name = re.sub("^.*/webacl/(.*)/.*$", "\\1", distribution['WebACLId'])
-        web_acl = f"{web_acl_name} ({web_acl_id})" if len(web_acl_id) > 0 else ""
-        # ViewerCertificate
-        certificate = ""
-        minimum_protocol_version = ""
-        if 'ViewerCertificate' in distribution:
-            certificate_arn = distribution['ViewerCertificate']['Certificate']
-            certificate_id = re.sub("^.*/", "", certificate_arn)
-            certificate_domain = [ c['DomainName'] for c in certificates if c['CertificateArn'] == certificate_arn ][0]
-            certificate = f"{certificate_domain} ({certificate_id})" if len(certificate_id) > 0 else ""
-            minimum_protocol_version = distribution['ViewerCertificate']['MinimumProtocolVersion']
-            ssl_support_method = distribution['ViewerCertificate']['SSLSupportMethod']
-
-        # DistributionConfig
-        distribution_config = get_distribution_config(distribution['Id'])
-        #pprint(distribution_config)
-
-        # GeoRestriction
-        geo_restrictions = distribution_config['Restrictions']['GeoRestriction']
-        geo_restriction = geo_restrictions['RestrictionType']
-        if geo_restrictions['Quantity'] > 0:
-                geo_restriction = ";".join(sorted(geo_restrictions['Items']))
-
-        distribution_info = {
-            'DistributionId': distribution['Id'],
-            'AlternateDomainNames': alternate_domain_names,
-            'DomainName': distribution['DomainName'],
-            'Description': distribution['Comment'],
-            'PriceClass': distribution['PriceClass'],
-            'HttpVersion': distribution['HttpVersion'],
-            'WebACL': web_acl,
-            'ViewerCertificate': certificate,
-            'SecurityPolicy': minimum_protocol_version,
-            'SSLSupportMethod': ssl_support_method,
-            'Logging': distribution_config['Logging']['Enabled'],
-            'Logging.Bucket': distribution_config['Logging']['Bucket'],
-            'Logging.Prefix': distribution_config['Logging']['Prefix'],
-            'Logging.IncludeCookies': distribution_config['Logging']['IncludeCookies'],
-            'DefaultRootObject': distribution_config['DefaultRootObject'],
-            'IsIPV6Enabled': distribution_config['IsIPV6Enabled'],
-            'Status': distribution['Status'],
-            'Enabled': distribution_config['Enabled'],
-            'GeoRestriction': geo_restriction,
-        }
-        distribution_infos.append(distribution_info)
-
-        # Origins
-        for origin in distribution_config['Origins']['Items']:
-            oai = '-'
-            origin_protocol_policy = '-'
-            origin_http_port = '-'
-            origin_https_port = '-'
-            origin_ssl_protocols = '-'
-            origin_read_timeout = '-'
-            origin_keepalive_timeout = '-'
-            origin_custom_headers = '-'
-
-            if 'S3OriginConfig' in origin:
-                origin_type = 'S3'
-                if 'OriginAccessIdentity' in origin['S3OriginConfig']:
-                    oai = origin['S3OriginConfig']['OriginAccessIdentity']
-            elif 'CustomOriginConfig' in origin:
-                custom_origin_config = origin['CustomOriginConfig']
-                origin_type = 'Custom'
-                origin_protocol_policy = custom_origin_config['OriginProtocolPolicy']
-                origin_http_port = custom_origin_config['HTTPPort']
-                origin_https_port = custom_origin_config['HTTPSPort']
-                if custom_origin_config['OriginSslProtocols']['Quantity'] > 0:
-                    origin_ssl_protocols = ";".join(sorted(custom_origin_config['OriginSslProtocols']['Items']))
-                origin_read_timeout = custom_origin_config['OriginReadTimeout']
-                origin_keepalive_timeout = custom_origin_config['OriginKeepaliveTimeout']
-            else:
-                origin_type = ''
-
-            if origin['OriginShield']['Enabled']:
-                origin_shield = origin['OriginShield']['OriginShieldRegion']
-            else:
-                origin_shield = False
-
-            if origin['CustomHeaders']['Quantity'] > 0:
-                origin_custom_header_items = []
-                for item in origin['CustomHeaders']['Items']:
-                    if item['HeaderName'] in secret_custome_headers:
-                        origin_custom_header_items.append(f"{item['HeaderName']}:*****")
-                    else:
-                        origin_custom_header_items.append(f"{item['HeaderName']}:{item['HeaderValue']}")
-                origin_custom_headers = ";".join(sorted(origin_custom_header_items))
-
-            origin_info = {
-                'DistributionId': distribution['Id'],
-                'AlternateDomainNames': alternate_domain_names,
-                'OriginName': origin['Id'],
-                'OriginDomain': origin['DomainName'],
-                'OriginPath': origin['OriginPath'],
-                'OriginType': origin_type,
-                'OriginShield': origin_shield,
-                'OriginAccessIdentity': oai,
-                'OriginProtocolPolicy': origin_protocol_policy,
-                'HTTPPort': origin_http_port,
-                'HTTPSPort': origin_https_port,
-                'OriginSslProtocols': origin_ssl_protocols,
-                'OriginReadTimeout': origin_read_timeout,
-                'OriginKeepaliveTimeout': origin_keepalive_timeout,
-                'ConnectionAttempts': origin['ConnectionAttempts'],
-                'ConnectionTimeout': origin['ConnectionTimeout'],
-                'CustomHeaders': origin_custom_headers,
-            }
-            origin_infos.append(origin_info)
-
-        # Behavior
-        behaviors = []
-        if distribution_config['CacheBehaviors']['Quantity'] > 0:
-            behaviors = distribution_config['CacheBehaviors']['Items']
-        behaviors.extend([distribution_config['DefaultCacheBehavior']])
-        precedence = 0
-        for behavior in behaviors:
-            path_pattern = behavior['PathPattern'] if 'PathPattern' in behavior else "Default(*)"
-
-            # CachePolicy
-            cache_policy_name = '-'
-            cache_policy_params = {
-                'Headers': 'none',
-                'QueryStrings': 'none',
-                'Cookies': 'none',
-                'Gzip': False,
-                'Brotli': False,
-            }
-            if len(behavior['CachePolicyId']) > 0:
-                cache_policy_config = cf.get_cache_policy(Id=behavior['CachePolicyId'])['CachePolicy']['CachePolicyConfig']
-                #pprint(cache_policy_config)
-                cache_policy_name = f"{cache_policy_config['Name']}({behavior['CachePolicyId']})"
-                params = cache_policy_config['ParametersInCacheKeyAndForwardedToOrigin']
-
-                if 'Headers' in params['HeadersConfig']:
-                    headers = params['HeadersConfig']['Headers']
-                    cache_policy_params['Headers'] = ";".join(sorted(headers['Items']))
-                if 'QueryStrings' in params['QueryStringsConfig']:
-                    query_strings = params['QueryStringsConfig']['QueryStrings']
-                    cache_policy_params['QueryStrings'] = ";".join(sorted(query_strings['Items']))
-                if 'Cookies' in params['CookiesConfig']:
-                    cookies = params['CookiesConfig']['Cookies']
-                    cache_policy_params['Cookies'] = ";".join(sorted(cookies['Items']))
-
-                cache_policy = {
-                    'MinTTL': cache_policy_config['MinTTL'],
-                    'MaxTTL': cache_policy_config['MaxTTL'],
-                    'DefaultTTL': cache_policy_config['DefaultTTL'],
-                    'Headers': cache_policy_params['Headers'],
-                    'QueryStrings': cache_policy_params['QueryStrings'],
-                    'Cookies': cache_policy_params['Cookies'],
-                    'Gzip': cache_policy_params['Gzip'],
-                    'Brotli': cache_policy_params['Brotli'],
-                }
-            else:
-                forwarded_values = behavior['ForwardedValues']
-                headers = ";".join(sorted(behavior['Headers']['Items']))
-                query_strings = forwarded_values['QueryString']
-                if forwarded_values['QueryString']['QueryStringCacheKeys']['Quantity'] > 0:
-                    query_strings = ";".join(sorted(forwarded_values['QueryStringCacheKeys']['Items']))
-                cookies = forwarded_values['Cookies']['Forward']
-                if forwarded_values['Cookies']['WhitelistedNames']['Quantity'] > 0:
-                    cookies = ";".join(sorted(forwarded_values['Cookies']['WhitelistedNames']['Items']))
-
-                cache_policy = {
-                    'MinTTL': behavior['MinTTL'],
-                    'MaxTTL': behavior['MaxTTL'],
-                    'DefaultTTL': behavior['DefaultTTL'],
-                    'Headers': headers,
-                    'QueryStrings': query_strings,
-                    'Cookies': cookies,
-                    'Gzip': cache_policy_params['Gzip'],
-                    'Brotli': cache_policy_params['Brotli'],
-                }
-
-            # OriginRequestPolicy
-            origin_request_policy_name = '-'
-            origin_request_policy_params = {
-                'HeaderBehavior': 'none',
-                'QueryStringBehavior': 'none',
-                'CookieBehavior': 'none',
-            }
-            if len(behavior['OriginRequestPolicyId']) > 0:
-                origin_request_policy_config = cf.get_origin_request_policy(Id=behavior['OriginRequestPolicyId'])['OriginRequestPolicy']['OriginRequestPolicyConfig']
-                #pprint(origin_request_policy_config)
-                origin_request_policy_name = f"{origin_request_policy_config['Name']}({behavior['OriginRequestPolicyId']})"
-
-                if 'Headers' in origin_request_policy_config['HeadersConfig']:
-                    headers = origin_request_policy_config['HeadersConfig']['Headers']
-                    origin_request_policy_params['HeaderBehavior'] = ";".join(sorted(headers['Items']))
-                if 'QueryStrings' in origin_request_policy_config['QueryStringsConfig']:
-                    query_strings = origin_request_policy_config['QueryStringsConfig']['QueryStrings']
-                    origin_request_policy_params['QueryStringBehavior'] = ";".join(sorted(query_strings['Items']))
-                if 'Cookies' in origin_request_policy_config['CookiesConfig']:
-                    cookies = origin_request_policy_config['CookiesConfig']['Cookies']
-                    origin_request_policy_params['CookieBehavior'] = ";".join(sorted(cookies['Items']))
-
-            # RestrictViewerAccess
-            if behavior['TrustedKeyGroups']['Quantity'] > 0:
-                restrict_viewer_access = ";".join(sorted(behavior['TrustedKeyGroups']['Items']))
-            elif behavior['TrustedSigners']['Quantity'] > 0:
-                restrict_viewer_access = ";".join(sorted(behavior['TrustedSigners']['Items']))
-            else:
-                restrict_viewer_access = False
-
-            # FieldLevelEncryptionId
-            field_level_encryption_id = behavior['FieldLevelEncryptionId'] if len(behavior['FieldLevelEncryptionId']) > 0 else '-'
-
-            # LambdaFunctionAssociations
-            # TODO Functions
-            lambda_function_associations = behavior['LambdaFunctionAssociations']['Quantity']
-
-            behavior_info = {
-                'DistributionId': distribution['Id'],
-                'AlternateDomainNames': alternate_domain_names,
-                'Precedence': precedence,
-                'PathPattern': path_pattern,
-                'TargetOriginId': behavior['TargetOriginId'],
-                'ViewerProtocolPolicy': behavior['ViewerProtocolPolicy'],
-                'Compress': behavior['Compress'],
-                'AllowedMethods': ";".join(behavior['AllowedMethods']['Items']),
-                'CachedMethods': ";".join(behavior['AllowedMethods']['CachedMethods']['Items']),
-                'CachePolicy': cache_policy_name,
-                'MinTTL': cache_policy['MinTTL'],
-                'MaxTTL': cache_policy['MaxTTL'],
-                'DefaultTTL': cache_policy['DefaultTTL'],
-                'Headers': cache_policy['Headers'],
-                'QueryStrings': cache_policy['QueryStrings'],
-                'Cookies': cache_policy['Cookies'],
-                'Gzip': cache_policy['Gzip'],
-                'Brotli': cache_policy['Brotli'],
-                'OriginRequestPolicy': origin_request_policy_name,
-                'HeaderBehavior': origin_request_policy_params['HeaderBehavior'],
-                'QueryStringBehavior': origin_request_policy_params['QueryStringBehavior'],
-                'CookieBehavior': origin_request_policy_params['CookieBehavior'],
-                'RestrictViewerAccess': restrict_viewer_access,
-                'SmoothStreaming': behavior['SmoothStreaming'],
-                'FieldLevelEncryptionId': field_level_encryption_id,
-                'LambdaFunctionAssociations': lambda_function_associations,
-            }
-            behavior_infos.append(behavior_info)
-            precedence += 1
-
-        # ErrorPages(CustomErrorResponses)
-        if distribution_config['CustomErrorResponses']['Quantity'] > 0:
-            items = distribution_config['CustomErrorResponses']['Items']
-        else:
-            items = []
-        for i in [400, 403, 404, 405, 414, 416, 500, 501, 502, 503, 504]:
-            error_pages_info = {
-                'DistributionId': distribution['Id'],
-                'AlternateDomainNames': alternate_domain_names,
-                'ErrorCode': i,
-                'ErrorCachingMinTTL': 300,
-                'ResponsePagePath': "-",
-                'ResponseCode': "-"
-            }
-            for item in items:
-                if i == item['ErrorCode']:
-                    error_pages_info['ErrorCachingMinTTL'] = item['ErrorCachingMinTTL']
-                    error_pages_info['ResponsePagePath'] = item['ResponsePagePath']
-                    error_pages_info['ResponseCode'] = item['ResponseCode']
-                    break
-            error_pages_infos.append(error_pages_info)
+        distribution_infos.append(cf_info.generate_distribution_info())
+        origin_infos.extend(cf_info.generate_origin_infos())
+        behavior_infos.extend(cf_info.generate_behavior_infos())
+        error_pages_infos.extend(cf_info.generate_error_pages_infos())
 
     #pprint(distribution_infos)
     write_tsv('./distribution.tsv', sorted(distribution_infos, key=itemgetter('AlternateDomainNames')))
