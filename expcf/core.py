@@ -6,13 +6,14 @@ import re
 import csv
 from operator import itemgetter
 from boto3.session import Session
+from . import cli
 
 cf = boto3.client('cloudfront')
 secret_custom_headers = ['x-pre-shared-key']
 
 
-def get_certificates() -> dict:
-    session = Session(region_name="us-east-1")
+def get_certificates(profile=None) -> dict:
+    session = Session(profile_name=profile, region_name="us-east-1")
     acm = session.client('acm')
     paginator = acm.get_paginator('list_certificates')
     return [page['CertificateSummaryList'] for page in paginator.paginate()][0]
@@ -29,7 +30,10 @@ class CfInfo():
     def __init__(self, distribution, certificates) -> None:
         self.distribution = distribution
         # AlternateDomainNames
-        self.alternate_domain_names = ";".join(sorted(distribution['Aliases']['Items']))
+        if 'Aliases' in distribution and 'Items' in distribution['Aliases']:
+            self.alternate_domain_names = ";".join(sorted(distribution['Aliases']['Items']))
+        else:
+            self.alternate_domain_names = "-"
         # WebACL
         self.web_acl_id = re.sub("^.*/", "", distribution['WebACLId'])
         self.web_acl_name = re.sub("^.*/webacl/(.*)/.*$", "\\1", distribution['WebACLId'])
@@ -46,6 +50,11 @@ class CfInfo():
         self.ssl_support_method = viewer_certificate['SSLSupportMethod'] if 'SSLSupportMethod' in viewer_certificate else "-"
         # DistributionConfig
         self.distribution_config = cf.get_distribution_config(Id=self.distribution['Id'])['DistributionConfig']
+        if not self.distribution_config['Logging']['Enabled']:
+            self.distribution_config['Logging']['Bucket'] = '-'
+            self.distribution_config['Logging']['Prefix'] = '-'
+        if len(self.distribution_config['DefaultRootObject']) == 0:
+            self.distribution_config['DefaultRootObject'] = '-'
         # GeoRestriction
         geo_restrictions = self.distribution_config['Restrictions']['GeoRestriction']
         self.geo_restriction = geo_restrictions['RestrictionType']
@@ -302,6 +311,13 @@ class CfInfo():
 
 
 def main():
+    args = cli.arg_parse()
+
+    if args.profile is not None:
+        global cf
+        session = Session(profile_name=args.profile)
+        cf = session.client('cloudfront')
+
     paginator = cf.get_paginator('list_distributions')
     try:
         list_distributions = [page['DistributionList']['Items'] for page in paginator.paginate()][0]
@@ -309,7 +325,7 @@ def main():
         raise e
 
     try:
-        certificates = get_certificates()
+        certificates = get_certificates(args.profile)
     except Exception as e:
         raise e
 
