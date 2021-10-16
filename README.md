@@ -15,6 +15,8 @@ Export describe CloudFrontDistribution configuration to tsv
 pip install git+https://github.com/htnosm/expcf.git
 ```
 
+OR
+
 ```
 python setup.py develop
 ```
