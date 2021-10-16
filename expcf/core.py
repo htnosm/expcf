@@ -60,6 +60,9 @@ class CfInfo():
         self.geo_restriction = geo_restrictions['RestrictionType']
         if geo_restrictions['Quantity'] > 0:
             self.geo_restriction = ";".join(sorted(geo_restrictions['Items']))
+        # additional CloudWatch metrics
+        monitoring_subscription = cf.get_monitoring_subscription(DistributionId=self.distribution['Id'])['MonitoringSubscription']
+        self.additional_metrics = monitoring_subscription['RealtimeMetricsSubscriptionConfig']['RealtimeMetricsSubscriptionStatus']
 
     def generate_distribution_info(self) -> dict:
         return {
@@ -82,6 +85,7 @@ class CfInfo():
             'Status': self.distribution['Status'],
             'Enabled': self.distribution_config['Enabled'],
             'GeoRestriction': self.geo_restriction,
+            'AdditionalMetrics': self.additional_metrics,
         }
 
     def generate_origin_infos(self) -> list:
