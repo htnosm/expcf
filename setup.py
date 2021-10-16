@@ -4,7 +4,7 @@ with open('requirements.txt') as requirements_file:
     install_requirements = requirements_file.read().splitlines()
 
 setup(
-    name="expcfcli",
+    name="expcf",
     version="0.0.1",
     description="Export describe CloudFrontDistribution",
     author="htnosm",
