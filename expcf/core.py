@@ -9,7 +9,6 @@ from boto3.session import Session
 from . import cli
 
 cf = boto3.client('cloudfront')
-secret_custom_headers = ['x-pre-shared-key']
 
 
 def get_certificates(profile=None) -> dict:
@@ -88,7 +87,7 @@ class CfInfo():
             'AdditionalMetrics': self.additional_metrics,
         }
 
-    def generate_origin_infos(self) -> list:
+    def generate_origin_infos(self, secret_custom_headers=[]) -> list:
         origin_infos = []
         for origin in self.distribution_config['Origins']['Items']:
             # OriginType
@@ -316,11 +315,11 @@ class CfInfo():
 
 def main():
     args = cli.arg_parse()
-
     if args.profile is not None:
         global cf
         session = Session(profile_name=args.profile)
         cf = session.client('cloudfront')
+    secret_custom_headers = [] if args.exclude is None else args.exclude.split(',')
 
     paginator = cf.get_paginator('list_distributions')
     try:
@@ -341,7 +340,7 @@ def main():
         cf_info = CfInfo(distribution, certificates)
 
         distribution_infos.append(cf_info.generate_distribution_info())
-        origin_infos.extend(cf_info.generate_origin_infos())
+        origin_infos.extend(cf_info.generate_origin_infos(secret_custom_headers))
         behavior_infos.extend(cf_info.generate_behavior_infos())
         error_pages_infos.extend(cf_info.generate_error_pages_infos())
 
