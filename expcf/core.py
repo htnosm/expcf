@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import boto3
 import re
 import csv
@@ -19,10 +20,14 @@ def get_certificates(profile=None) -> dict:
 
 
 def write_tsv(file, data_dict) -> None:
-    with open(file, 'w', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=data_dict[0].keys(), delimiter="\t", quotechar='"')
-        writer.writeheader()
-        writer.writerows(data_dict)
+    try:
+        with open(file, 'w', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=data_dict[0].keys(), delimiter="\t", quotechar='"')
+            writer.writeheader()
+            writer.writerows(data_dict)
+        print(f"Output to {file}")
+    except Exception as e:
+        print(e)
 
 
 class CfInfo():
@@ -315,6 +320,7 @@ class CfInfo():
 
 def main():
     args = cli.arg_parse()
+    print(args)
     if args.profile is not None:
         global cf
         session = Session(profile_name=args.profile)
@@ -344,10 +350,19 @@ def main():
         behavior_infos.extend(cf_info.generate_behavior_infos())
         error_pages_infos.extend(cf_info.generate_error_pages_infos())
 
-    write_tsv('./distribution.tsv', sorted(distribution_infos, key=itemgetter('AlternateDomainNames')))
-    write_tsv('./origins.tsv', sorted(origin_infos, key=itemgetter('AlternateDomainNames')))
-    write_tsv('./behaviors.tsv', sorted(behavior_infos, key=itemgetter('AlternateDomainNames', 'Precedence')))
-    write_tsv('./error_pages.tsv', sorted(error_pages_infos, key=itemgetter('AlternateDomainNames', 'ErrorCode')))
+    sorted_distribution_infos = sorted(distribution_infos, key=itemgetter('AlternateDomainNames'))
+    sorted_origin_infos = sorted(origin_infos, key=itemgetter('AlternateDomainNames'))
+    sorted_behavior_infos = sorted(behavior_infos, key=itemgetter('AlternateDomainNames', 'Precedence'))
+    sorted_error_pages_infos = sorted(error_pages_infos, key=itemgetter('AlternateDomainNames', 'ErrorCode'))
+
+    path = './'
+    if args.directory is not None:
+        path = args.directory
+        os.makedirs(path, exist_ok=True)
+    write_tsv(f'{path}/distribution.tsv', sorted_distribution_infos)
+    write_tsv(f'{path}/origins.tsv', sorted_origin_infos)
+    write_tsv(f'{path}/behaviors.tsv', sorted_behavior_infos)
+    write_tsv(f'{path}/error_pages.tsv', sorted_error_pages_infos)
 
 
 if __name__ == '__main__':
