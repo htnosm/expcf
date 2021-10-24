@@ -32,3 +32,9 @@ expcf
 ```
 expcf -p your_aws_profile
 ```
+
+### Mask custom headers value
+
+```
+expcf -x x-pre-shared-key,x-secret-value
+```
