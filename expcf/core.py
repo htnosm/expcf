@@ -330,6 +330,9 @@ def main():
     paginator = cf.get_paginator('list_distributions')
     try:
         list_distributions = [page['DistributionList']['Items'] for page in paginator.paginate()][0]
+    except KeyError:
+        print("CloudFront Distribution does not exist")
+        exit()
     except Exception as e:
         raise e
 
