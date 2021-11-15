@@ -183,12 +183,18 @@ class CfInfo():
                 if 'Headers' in params['HeadersConfig']:
                     headers = params['HeadersConfig']['Headers']
                     cache_policy_params['Headers'] = ";".join(sorted(headers['Items']))
+                else:
+                    cache_policy_params['Headers'] = params['HeadersConfig']['HeaderBehavior']
                 if 'QueryStrings' in params['QueryStringsConfig']:
                     query_strings = params['QueryStringsConfig']['QueryStrings']
                     cache_policy_params['QueryStrings'] = ";".join(sorted(query_strings['Items']))
+                else:
+                    cache_policy_params['QueryStrings'] = params['QueryStringsConfig']['QueryStringBehavior']
                 if 'Cookies' in params['CookiesConfig']:
                     cookies = params['CookiesConfig']['Cookies']
                     cache_policy_params['Cookies'] = ";".join(sorted(cookies['Items']))
+                else:
+                    cache_policy_params['Cookies'] = params['CookiesConfig']['CookieBehavior']
                 for key in ["MinTTL", "MaxTTL", "DefaultTTL"]:
                     cache_policy_params[key] = cache_policy_config[key] if key in cache_policy_config else cache_policy_params[key]
                 for key in ["Gzip", "Brotli"]:
@@ -225,12 +231,18 @@ class CfInfo():
                 if 'Headers' in origin_request_policy_config['HeadersConfig']:
                     headers = origin_request_policy_config['HeadersConfig']['Headers']
                     origin_request_policy_params['HeaderBehavior'] = ";".join(sorted(headers['Items']))
-                if 'QueryStringBehavior' in origin_request_policy_config['QueryStringsConfig']:
-                    query_string_behavior = origin_request_policy_config['QueryStringsConfig']['QueryStringBehavior']
-                    origin_request_policy_params['QueryStringBehavior'] = query_string_behavior
-                if 'CookieBehavior' in origin_request_policy_config['CookiesConfig']:
-                    cookie_behavior = origin_request_policy_config['CookiesConfig']['CookieBehavior']
-                    origin_request_policy_params['CookieBehavior'] = cookie_behavior
+                else:
+                    origin_request_policy_params['HeaderBehavior'] = origin_request_policy_config['HeadersConfig']['HeaderBehavior']
+                if 'QueryStrings' in origin_request_policy_config['QueryStringsConfig']:
+                    query_strings = origin_request_policy_config['QueryStringsConfig']['QueryStrings']
+                    origin_request_policy_params['QueryStringBehavior'] = ";".join(sorted(query_strings['Items']))
+                else:
+                    origin_request_policy_params['QueryStringBehavior'] = origin_request_policy_config['QueryStringsConfig']['QueryStringBehavior']
+                if 'Cookies' in origin_request_policy_config['CookiesConfig']:
+                    cookies = origin_request_policy_config['CookiesConfig']['Cookies']
+                    origin_request_policy_params['CookieBehavior'] = ";".join(sorted(cookies['Items']))
+                else:
+                    origin_request_policy_params['CookieBehavior'] = origin_request_policy_config['CookiesConfig']['CookieBehavior']
 
             # RestrictViewerAccess
             if 'TrustedKeyGroups' in behavior and behavior['TrustedKeyGroups']['Quantity'] > 0:
