@@ -225,12 +225,12 @@ class CfInfo():
                 if 'Headers' in origin_request_policy_config['HeadersConfig']:
                     headers = origin_request_policy_config['HeadersConfig']['Headers']
                     origin_request_policy_params['HeaderBehavior'] = ";".join(sorted(headers['Items']))
-                if 'QueryStrings' in origin_request_policy_config['QueryStringsConfig']:
-                    query_strings = origin_request_policy_config['QueryStringsConfig']['QueryStrings']
-                    origin_request_policy_params['QueryStringBehavior'] = ";".join(sorted(query_strings['Items']))
-                if 'Cookies' in origin_request_policy_config['CookiesConfig']:
-                    cookies = origin_request_policy_config['CookiesConfig']['Cookies']
-                    origin_request_policy_params['CookieBehavior'] = ";".join(sorted(cookies['Items']))
+                if 'QueryStringBehavior' in origin_request_policy_config['QueryStringsConfig']:
+                    query_string_behavior = origin_request_policy_config['QueryStringsConfig']['QueryStringBehavior']
+                    origin_request_policy_params['QueryStringBehavior'] = query_string_behavior
+                if 'CookieBehavior' in origin_request_policy_config['CookiesConfig']:
+                    cookie_behavior = origin_request_policy_config['CookiesConfig']['CookieBehavior']
+                    origin_request_policy_params['CookieBehavior'] = cookie_behavior
 
             # RestrictViewerAccess
             if 'TrustedKeyGroups' in behavior and behavior['TrustedKeyGroups']['Quantity'] > 0:
