@@ -244,6 +244,35 @@ class CfInfo():
                 else:
                     origin_request_policy_params['CookieBehavior'] = origin_request_policy_config['CookiesConfig']['CookieBehavior']
 
+            # ResponseHeadersPolicy
+            response_headers_policy_params = {
+                'Name': '-',
+                'CORS': '-',
+                'SecurityHeaders': '-',
+            }
+            if 'ResponseHeadersPolicyId' in behavior and len(behavior['ResponseHeadersPolicyId']) > 0:
+                response_headers_policy_config = cf.get_response_headers_policy_config(Id=behavior['ResponseHeadersPolicyId'])['ResponseHeadersPolicyConfig']
+                response_headers_policy_params['Name'] = f"{response_headers_policy_config['Name']}({behavior['ResponseHeadersPolicyId']})"
+                if 'CorsConfig' in response_headers_policy_config:
+                    cors_config = response_headers_policy_config['CorsConfig']
+                    rows = []
+                    rows.append(f"AccessControlAllowCredentials: {cors_config['AccessControlAllowCredentials']}")
+                    for k in ['AccessControlAllowHeaders', 'AccessControlAllowMethods', 'AccessControlAllowOrigins', 'AccessControlExposeHeaders']:
+                        detail = cors_config[k]
+                        if detail['Quantity'] > 0:
+                            rows.append(f"{k}: {detail['Items']}")
+                    if 'AccessControlMaxAgeSec' in cors_config:
+                        rows.append(f"AccessControlMaxAgeSec: {cors_config['AccessControlMaxAgeSec']}")
+                    if 'OriginOverride' in cors_config:
+                        rows.append(f"OriginOverride: {cors_config['OriginOverride']}")
+                    response_headers_policy_params['CORS'] = ";".join(rows)
+                if 'SecurityHeadersConfig' in response_headers_policy_config:
+                    security_headers_config = response_headers_policy_config['SecurityHeadersConfig']
+                    rows = []
+                    for k in security_headers_config.keys():
+                        rows.append(f"{k} : {security_headers_config[k]}")
+                    response_headers_policy_params['SecurityHeaders'] = ";".join(rows)
+
             # RestrictViewerAccess
             if 'TrustedKeyGroups' in behavior and behavior['TrustedKeyGroups']['Quantity'] > 0:
                 restrict_viewer_access = ";".join(sorted(behavior['TrustedKeyGroups']['Items']))
@@ -294,6 +323,9 @@ class CfInfo():
                 'HeaderBehavior': origin_request_policy_params['HeaderBehavior'],
                 'QueryStringBehavior': origin_request_policy_params['QueryStringBehavior'],
                 'CookieBehavior': origin_request_policy_params['CookieBehavior'],
+                'ResponseHeadersPolicy': response_headers_policy_params['Name'],
+                'CORS': response_headers_policy_params['CORS'],
+                'SecurityHeaders': response_headers_policy_params['SecurityHeaders'],
                 'RestrictViewerAccess': restrict_viewer_access,
                 'SmoothStreaming': behavior['SmoothStreaming'],
                 'FieldLevelEncryptionId': field_level_encryption_id,
