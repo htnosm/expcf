@@ -370,9 +370,9 @@ def main():
     sorted_behavior_infos = sorted(behavior_infos, key=itemgetter('AlternateDomainNames', 'Precedence'))
     sorted_error_pages_infos = sorted(error_pages_infos, key=itemgetter('AlternateDomainNames', 'ErrorCode'))
 
-    path = './'
-    if args.directory is not None:
-        path = args.directory
+    path = '.'
+    if args.directory is not None and args.directory != "/":
+        path = re.sub("/$", "", args.directory)
         os.makedirs(path, exist_ok=True)
     write_tsv(f'{path}/distribution.tsv', sorted_distribution_infos)
     write_tsv(f'{path}/origins.tsv', sorted_origin_infos)
