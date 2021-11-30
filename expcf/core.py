@@ -198,7 +198,7 @@ class CfInfo():
                 for key in ["MinTTL", "MaxTTL", "DefaultTTL"]:
                     cache_policy_params[key] = cache_policy_config[key] if key in cache_policy_config else cache_policy_params[key]
                 for key in ["Gzip", "Brotli"]:
-                    cache_policy_params[key] = params[f"EnableAcceptEncodin{key}"] if f"EnableAcceptEncodin{key}" in params else cache_policy_params[key]
+                    cache_policy_params[key] = params[f"EnableAcceptEncoding{key}"] if f"EnableAcceptEncoding{key}" in params else cache_policy_params[key]
             else:
                 forwarded_values = behavior['ForwardedValues']
                 if 'Headers' in behavior:
