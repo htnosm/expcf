@@ -67,6 +67,8 @@ class CfInfo():
         # additional CloudWatch metrics
         monitoring_subscription = cf.get_monitoring_subscription(DistributionId=self.distribution['Id'])['MonitoringSubscription']
         self.additional_metrics = monitoring_subscription['RealtimeMetricsSubscriptionConfig']['RealtimeMetricsSubscriptionStatus']
+        # Type
+        self.distribution_type = 'Staging' if self.distribution.get('Staging', False) else 'Production'
 
     def generate_distribution_info(self) -> dict:
         return {
@@ -86,6 +88,7 @@ class CfInfo():
             'Logging.IncludeCookies': self.distribution_config['Logging']['IncludeCookies'],
             'DefaultRootObject': self.distribution_config['DefaultRootObject'],
             'IsIPV6Enabled': self.distribution_config['IsIPV6Enabled'],
+            'Type': self.distribution_type,
             'Status': self.distribution['Status'],
             'Enabled': self.distribution_config['Enabled'],
             'GeoRestriction': self.geo_restriction,
